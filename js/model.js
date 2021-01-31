@@ -168,138 +168,166 @@ const ClassHead = (input, num_anchor, num = 0) => {
 
 // Meshgrid
 const meshgrid_tf = (x,y) => {
-    x.print();
-    y.print();
     const grid_shape = [y.shape[0], x.shape[0]];
-    console.log(grid_shape);
     const grid_x = tf.broadcastTo(tf.reshape(x, [1, -1]), grid_shape);
     const grid_y = tf.broadcastTo(tf.reshape(y, [-1, 1]), grid_shape);
     return [grid_x, grid_y];
 };
 
 // Repeat
-const repeat_tf = (x, repeat) => {
+// Works only axis = 0;
+const repeat_tf = async (x, repeat) => {
+    const arr_x = await x.array();
+    const size_x = arr_x.length;
+    var result = [];
 
+    for(var index = 0; index < size_x; index++) {
+        var data = arr_x[index];
+
+        for(var rep = 0; rep < repeat; rep++)
+            result.push(data);
+    }
+
+    return tf.tensor(result);
 };
 
-/*
-def _meshgrid_tf(x, y):
-    """ workaround solution of the tf.meshgrid() issue:
-        https://github.com/tensorflow/tensorflow/issues/34470"""
-    grid_shape = [tf.shape(y)[0], tf.shape(x)[0]]
-    grid_x = tf.broadcast_to(tf.reshape(x, [1, -1]), grid_shape)
-    grid_y = tf.broadcast_to(tf.reshape(y, [-1, 1]), grid_shape)
-    return grid_x, grid_y
-*/
-
 // Prior Box Tensorflow
-const prior_box_tf = (image_sizes, min_sizes, steps, clip = false)=> {
+const prior_box_tf = async (image_sizes, min_sizes, steps, clip = false)=> {
     const img_sizes = tf.cast(tf.tensor(image_sizes), 'float32');
-    const tf_img_size = tf.reshape(img_sizes, [1, 2])
-    const tf_steps = tf.reshape(tf.cast(steps, 'float32'), [-1, 1]);
-    const feature_maps = tf.ceil(tf.div(tf_img_size, tf_steps) ).arraySync();
 
-    anchors = []
+    const tf_img_size = tf.reshape(img_sizes, [1, 2])
+
+    const tf_steps = tf.reshape(tf.cast(tf.tensor(steps), 'float32'), [-1, 1]);
+    const feature_maps = await tf.ceil(tf.div(tf_img_size, tf_steps) ).array();
+
+    var anchors = []
+    var output = null;
 
     for(var k = 0; k < min_sizes.length; k++) {
         const feature_0 = feature_maps[k][0];
         const feature_1 = feature_maps[k][1];
         const [grid_x, grid_y] = meshgrid_tf(tf.range(0, feature_1), tf.range(0, feature_0));
-        const cx = tf.div(tf.mul(tf.add(grid_x, tf.scalar(0.5)), tf.scalar(steps[k]) ), tf.scalar(image_sizes[1]) ); //(grid_x + 0.5) * steps[k] / img_sizes[1]; // TODO:
-        const cy = tf.div(tf.mul(tf.add(grid_y, tf.scalar(0.5)), tf.scalar(steps[k]) ), tf.scalar(image_sizes[0]) ); //(grid_y + 0.5) * steps[k] / img_sizes[0];
-        var cxcy = tf.stack([cx, cy], axis = 1);
-        var stacked_cxcy = tf.reshape(cxcy, [-1, 2]);
-        var min_sizes_shape = tf.tensor(min_sizes[k]).shape[0];
 
-        console.log('Before Repeat');
-        console.log(min_sizes_shape);
-        stacked_cxcy.print();
-        var repeatcxcy = tf.repeat(stacked_cxcy, repeat=min_sizes_shape, axis = 0);
+        const cx = tf.div(tf.mul(tf.add(grid_x, tf.scalar(0.5)), tf.scalar(steps[k]) ), (await img_sizes.array())[1]);
+        const cy = tf.div(tf.mul(tf.add(grid_y, tf.scalar(0.5)), tf.scalar(steps[k]) ), (await img_sizes.array())[0]);
 
-        repeatcxcy.print();
+        var stacked_cxcy = tf.stack([cx, cy], axis = -1);
+        stacked_cxcy = tf.reshape(stacked_cxcy, [-1, 2]);
+
+        const min_sizes_shape = tf.tensor(min_sizes[k]).shape[0];
+        var cxcy = await repeat_tf(stacked_cxcy, repeat = min_sizes_shape);
+
+        const sx = tf.div(tf.tensor(min_sizes[k]), (await img_sizes.array())[1]);
+        const sy = tf.div(tf.tensor(min_sizes[k]), (await img_sizes.array())[0]);
+        const stacked_sxsy = tf.stack([sx, sy], 1);
+
+        const repeatsxsy = await repeat_tf(stacked_sxsy.expandDims(), grid_x.shape[0] * grid_x.shape[1]);
+        var sxsy = tf.reshape(repeatsxsy, [-1, 2]);
+
+        anchors.push(tf.concat([cxcy, sxsy], 1));
     }
+
+    output = tf.concat(anchors, axis = 0);
+
+    if(clip)
+        output = tf.clipByValue(output, 0, 1);
+
+    return output;
 };
 
-/*
-"""prior box"""
-    image_sizes = tf.cast(tf.convert_to_tensor(image_sizes), tf.float32)
-    feature_maps = tf.math.ceil(
-        tf.reshape(image_sizes, [1, 2]) /
-        tf.reshape(tf.cast(steps, tf.float32), [-1, 1]))
+const decode_tf = (pred, priors, variances) => {
+    const bbox_labels = pred.slice([0,0],[-1, 4]);
+    const bbox = decode_bbox(bbox_labels, priors, variances);
 
-    anchors = []
-    for k in range(len(min_sizes)):
-        grid_x, grid_y = _meshgrid_tf(tf.range(feature_maps[k][1]),
-                                      tf.range(feature_maps[k][0]))
-        cx = (grid_x + 0.5) * steps[k] / image_sizes[1]
-        cy = (grid_y + 0.5) * steps[k] / image_sizes[0]
-        cxcy = tf.stack([cx, cy], axis=-1)
-        cxcy = tf.reshape(cxcy, [-1, 2])
-        cxcy = tf.repeat(cxcy, repeats=tf.shape(min_sizes[k])[0], axis=0)
+    const landmark_labels = pred.slice([0,4],[-1,10]);
+    const landm = decode_landm(landmark_labels, priors, variances);
 
-        sx = min_sizes[k] / image_sizes[1]
-        sy = min_sizes[k] / image_sizes[0]
-        sxsy = tf.stack([sx, sy], 1)
-        sxsy = tf.repeat(sxsy[tf.newaxis],
-                         repeats=tf.shape(grid_x)[0] * tf.shape(grid_x)[1],
-                         axis=0)
-        sxsy = tf.reshape(sxsy, [-1, 2])
+    const landm_valid = pred.slice([0,14],[-1,1]);
+    const conf = pred.slice([0,15],[-1,1]);
 
-        anchors.append(tf.concat([cxcy, sxsy], 1))
+    return tf.concat([bbox, landm, landm_valid, conf], axis = 1); //, axis = 1);
+};
 
-    output = tf.concat(anchors, axis=0)
+const decode_bbox = (pred, priors, variances) => {
+    var centers = tf.mul(tf.mul(tf.add(priors.slice([0,0],[-1,2]), pred.slice([0,0],[-1,2])), tf.scalar(variances[0])), priors.slice([0,2],[-1,-1]));
+    var sides = tf.mul(priors.slice([0,2],[-1,-1]), tf.mul(pred.slice([0,2],[-1,-1]), tf.scalar(variances[1])).exp() )
 
-    if clip:
-        output = tf.clip_by_value(output, 0, 1)
+    return tf.concat([tf.div(tf.sub(centers, sides), tf.scalar(2)), tf.div(tf.add(centers, sides), tf.scalar(2))], axis = 1);
+};
 
-    return output
-*/
+const decode_landm = (pred, priors, variances) => {
+    var priors_arr = [priors.slice([0,0], [-1,2]), priors.slice([0,2], [-1,-1])];
+    var landm = [];
+
+    for(var i = 0; i < 5; i++)
+        landm.push(tf.add(tf.mul(tf.mul(pred.slice([0,2*i], [-1,2]), tf.scalar(variances[0]) ), priors_arr[1]), priors_arr[0]));
+
+    return tf.concat(landm, axis = 1);
+};
 
 // RetinaFaceModel
-const detection = (tensor, resnet_backbone, config) => {
+const detection = async (tensor, resnet_backbone, config) => {
     
-    const output = resnet_backbone.predict(tensor, { batchSize: 1 });
+    var output = resnet_backbone.predict(tensor, { batchSize: 1 });
     console.log('Backbone Model predict successfully.');
 
-    const fpn_output = FPN(output, config);
+    var fpn_output = FPN(output, config);
     console.log('FPN predict successfully.');
 
-    const features = fpn_output.map((f, i) => SSH(f, config, i));
+    var features = fpn_output.map((f, i) => SSH(f, config, i));
     console.log('SSH predict successfully.');
 
-    const num_anchor = config.min_size[0].length;
-    const bbox_regressions = tf.concat(features.map((f, i) => BboxHead(f, num_anchor, i)), axis = 1);
-    const landm_regressions = tf.concat(features.map((f, i) => LandmarkHead(f, num_anchor, i)), axis = 1);
-    const classifications = tf.concat(features.map((f, i) => ClassHead(f, num_anchor, i)), axis = 1);
-    const classify_result = classifications.softmax();
-    const total_result = classify_result.shape[1];  // 10k
+    var num_anchor = config.min_size[0].length;
+    var bbox_regressions = tf.concat(features.map((f, i) => BboxHead(f, num_anchor, i)), axis = 1);
+    var landm_regressions = tf.concat(features.map((f, i) => LandmarkHead(f, num_anchor, i)), axis = 1);
+    var classifications = tf.concat(features.map((f, i) => ClassHead(f, num_anchor, i)), axis = 1);
+    var classify_result = classifications.softmax();
+    var total_result = classify_result.shape[1];  // 10k
     
     console.log('Regression and Classification Successfully.');
-    console.log(`Bounding Box Shape = ${bbox_regressions.shape}`);
-    console.log(`Landmark Shape = ${landm_regressions.shape}`);
-    console.log(`Classify Shape = ${classify_result.shape}`);
 
     // Show Result
-    const first_arr = classify_result.slice([0,0,0], [1, -1, 1]);
-    const second_arr = classify_result.slice([0,0,1], [1, -1, 1]);
+    var first_arr = classify_result.slice([0,0,0], [1, -1, 1]);
+    var second_arr = classify_result.slice([0,0,1], [1, -1, 1]);
 
-    const preds = tf.concat([bbox_regressions, landm_regressions, tf.onesLike(first_arr) , second_arr], axis = 2);
-    const preds_result = preds.reshape([ total_result, preds.shape[2] ]);
+    var preds = tf.concat([bbox_regressions, landm_regressions, tf.onesLike(first_arr) , second_arr], axis = 2);
+    var preds_result = preds.reshape([ total_result, preds.shape[2] ]);
     preds.dispose();
 
-    console.log('Predictions');
-    console.log(preds_result);
-    console.log(preds_result.shape);
+    //console.log('Predictions');
 
-    priors = prior_box_tf([tensor.shape[1], tensor.shape[2]], config.min_size, config.steps, config.clip);
+    var priors = await prior_box_tf([tensor.shape[2], tensor.shape[1]], config.min_size, config.steps, config.clip);
+
+    //console.log('Priors');
+    //priors.print();
+
+    var decode_preds = await decode_tf(preds_result, priors, config.variances);
+
+    //console.log('Decode Predictions');
+    //decode_preds.print();
+
+    // NMS
+    var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes = decode_preds.slice([0,0],[-1, 4]), scores = decode_preds.slice([0,15],[-1,1]).squeeze(), maxOutputSize = decode_preds.shape[0], iouThreshold = config.iou_thresh, scoreThreshold = config.score_thresh);
+    var output = tf.gather(decode_preds, selected_indices);
+
+    // Result
+    /*
+    decode_preds.bbox = tf.gather(decode_preds.bbox, selected_indices);
+    decode_preds.landm = tf.gather(decode_preds.landm, selected_indices);
+    decode_preds.landm_valid = tf.gather(decode_preds.landm_valid, selected_indices);
+    decode_preds.conf = tf.gather(decode_preds.conf, selected_indices);
+    */
 
     // Dispose
     preds.dispose();
-    features.dispose();
     bbox_regressions.dispose();
     landm_regressions.dispose();
     classifications.dispose();
     classify_result.dispose();
     first_arr.dispose(); second_arr.dispose();
     preds.dispose();
+    selected_indices.dispose();
+
+    // Return
+    return output;
 };

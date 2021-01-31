@@ -66,12 +66,6 @@ const convertopencvmattotensor = (img) => {
     return img_tensor;
 };
 
-const convertopencvmattoblob = (img, mean) => {
-    var blob = cv.blobFromImage(img, 1, {width: img.size().width, height: img.size().height}, [mean[2], mean[1], mean[0], 0], false);
-
-    return blob;
-};
-
 // Pad input images with specified steps
 const pad_input_image = (img, max_steps) => {
     // Pad Image to suitable shape
@@ -116,7 +110,17 @@ const load_model = (MODEL_URL, filename) =>
     });
 
 const recover_pad_output = (outputs, pad_params) => {
+    var [img_h, img_w, img_pad_h, img_pad_w] = pad_params;
+    var recover_value = tf.tensor([(img_pad_w + img_w) / img_w, (img_pad_h + img_h) / img_h]);
+    var recover_xy = tf.mul(tf.reshape(outputs.slice([0,0], [-1,14]), [-1, 7, 2]), recover_value).reshape([-1, 14]);
 
+    var bbox = recover_xy.slice([0,0],[-1, 4])
+    var landm = recover_xy.slice([0,4],[-1,10]);
+
+    var landm_valid = outputs.slice([0,14],[-1,1]);
+    var conf = outputs.slice([0,15],[-1,1]);
+
+    return { bbox, landm, landm_valid, conf };
 };
 
 const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
@@ -133,7 +137,7 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
 
     // Pad Image
     var result = pad_input_image(rgb_image, max_steps);
-    var { img, mean } = result;
+    var { img, param } = result;
 
     // Convert into Tensor
     result_image  = resize_image_resolution(img);
@@ -145,20 +149,40 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
 
     // Read Model and run
     const resnet_backbone = await tf.loadLayersModel(config.url);
-    detection(tensor, resnet_backbone, config);
+    var detection_result = await detection(tensor, resnet_backbone, config);
+    var output = recover_pad_output(detection_result, param);
+    console.log(`Padding parameter = ${param}`);
+    // Debugging Purpose
+    /*
+    console.log(`Bound Box Result (shape = ${detection_result.bbox.shape})`);
+    detection_result.bbox.print();
+    console.log(`Landmark Result (shape = ${detection_result.landm.shape})`);
+    detection_result.landm.print();
+    console.log(`Confidence Result (shape = ${detection_result.conf.shape})`);
+    detection_result.conf.print();
+    */
+
+    var bounding_box = output.bbox.array();
+    var landmark = output.landm.array();
+    var landmark_valid = output.landm_valid.array();
+    var conf = output.conf.array();
 
     // Dispose
     tensor.dispose();
-    resize_tensor.dispose();
 
     // Return
+    return {bounding_box, landmark, landmark_valid, conf, size: output.bbox.shape[0]}
 };
 
+// Configuration
 const config = {
     input_size: [800, 600],
     min_size: [[16, 32], [64, 128], [256, 512]],
     out_ch: 256,
     url: 'model/Backbone/model.json',
     steps: [8, 16, 32],
+    variances: [0.1, 0.2],
+    iou_thresh: 0.4,
+    score_thresh: 0.02,
     clip: false
 };

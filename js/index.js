@@ -50,9 +50,26 @@ const onstopbuttonclick = (event) => {
     }
 };
 
-const oncapturefaceclick = (event) => {
+const oncapturefaceclick =  (event) => {
     event.preventDefault();
-    detect_face('main-canvas-area', 1, 32);
+    detect_face('main-canvas-area', 1, 32).then(({ bounding_box, landmark, conf, size }) => {
+        console.log('Result');
+        console.log(bounding_box);
+        /*
+        for(var i = 0; i < size; i++) {
+            console.log(`result of ${i+1}`);
+            console.log('Bounding Box');
+            console.log(bounding_box[i]);
+            console.log('Landmark');
+            console.log(landmark[i]);
+            console.log('Confidence');
+            console.log(conf[i]);
+        }
+        */
+    });
+
+    
+    
 };
 
 /*var main_button = document.getElementById('open-video');
