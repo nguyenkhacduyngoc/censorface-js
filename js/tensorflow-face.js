@@ -269,7 +269,7 @@ const detect_face = async (canvas_id, resnet_backbone, scale_down_factor, max_st
 
     var recovered_output = recover_pad_output(detection_result, param, width, height); //, tensor.shape[2], tensor.shape[1]);
     var {bbox, landm, landm_valid, conf, size} = tf_nms(recovered_output, config.iou_thresh);
-    
+
     // Dispose
     tensor.dispose();
     detection_result.dispose();
@@ -312,6 +312,3 @@ const drawbbox_landmark = (ctx, output) => {
             }
     }
 };
-
-//"model/weights.json"
-//["FPN", "SSH_0", "SSH_1", "SSH_2", "ClassHead_0", "ClassHead_1", "ClassHead_2", "Bbox_0", "Bbox_1", "Bbox_2", "Landmark_0", "Landmark_1", "Landmark_2"]
