@@ -7,22 +7,30 @@
         <video id = 'main-video-area' style = 'display:none' muted></video>
         <canvas id = 'main-canvas-area'></canvas>
         
+        <label for = 'framework'>Framework</label>
+        <select id = 'framework' name = 'framework'>
+            <option value = '0'>ONNX</option>
+            <option value = '1'>Tensorflow.js</option>
+        </select>
+
+        <label for = 'model'>Model (ONNX) : </label>
         <select id = 'model' name = 'model'>
             <option value = '0'>ResNet-50</option>
             <option value = '1'>MobileNet0.25</option>
         </select>
         <input type = 'file' id = 'browseimage' />
+        <button id = 'load-model'>Load Model</button>
         <button id = 'capture-face'>Capture Face</button>
 
         <script src = 'js/common.js'></script>
         <script src = 'js/opencv.js'></script>
-        <!-- <script src="js/tfjs.min.js"></script>
-        <script src = 'js/model.js'></script>
-        <script src = 'js/face.js'></script> -->
+        <script src="js/tfjs.min.js"></script>
+        <script src = 'js/tensorflow-model.js'></script>
+        <script src = 'js/tensorflow-face.js'></script> 
         <script src = 'js/onnx_face.js'></script>
         <script src = './onnx.min.js'></script>
         <script src = './onnx-wasm.js'></script>
-        <script src = 'js/resize.js'></script>
+        <!-- <script src = 'js/resize.js'></script> -->
         <script src = 'js/ndarray-browser-min.js'></script>
         <script src = 'js/index.js'></script>
     </body>

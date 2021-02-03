@@ -109,16 +109,14 @@ const load_model = (MODEL_URL, filename) =>
         }
     });
 
-const recover_pad_output = (outputs, pad_params, width, height) => {
+const recover_pad_output = (outputs, pad_params, width, height) => { //, width, height) => {
     var [img_h, img_w, img_pad_h, img_pad_w] = pad_params;
     var recover_value = tf.tensor([(img_pad_w + img_w) / img_w, (img_pad_h + img_h) / img_h]);
     var recover_xy = tf.mul(tf.reshape(outputs.slice([0,0], [-1,14]), [-1, 7, 2]), recover_value).reshape([-1, 14]);
 
     var bbox = recover_xy.slice([0,0],[-1, 4]);
-    var size = bbox.shape[0];
-    var landm = recover_xy.slice([0,4],[-1,10]).arraySync();
-
-    var temp_bbox = bbox.arraySync();
+    var size = outputs.shape[0];
+    //var landm = recover_xy.slice([0,4],[-1,10]).arraySync();
 
     var bbox_result = [];
     var landm_result = [];
@@ -126,7 +124,8 @@ const recover_pad_output = (outputs, pad_params, width, height) => {
     for(var index = 0; index < size; index++) {
 
         // Bounding Box
-        var temp = temp_bbox[index];
+        var temp = recover_xy.slice([index,0],[-1, 4]).dataSync();
+
         var x1 = temp[0] * width;
         var x2 = temp[1] * height;
         var y1 = temp[2] * width;
@@ -137,7 +136,7 @@ const recover_pad_output = (outputs, pad_params, width, height) => {
         // Landmark
         landm_result.push([]);
 
-        var landmark = landm[index];
+        var landmark = recover_xy.slice([index,4],[-1, 10]).dataSync();
         for(var landm_index = 0; landm_index < landmark.length; landm_index += 2) {
             var x = landmark[landm_index] * width;
             var y = landmark[landm_index + 1] * height;
@@ -147,21 +146,96 @@ const recover_pad_output = (outputs, pad_params, width, height) => {
     }
 
     var landm_valid = outputs.slice([0,14],[-1,1]);
-    landm_valid = landm_valid.reshape([landm_valid.shape[0]]).arraySync();
+    landm_valid = landm_valid.reshape([landm_valid.shape[0]]).dataSync();
 
     var conf = outputs.slice([0,15],[-1,1]);
-    conf = conf.reshape([conf.shape[0]]).arraySync();
+    conf = conf.reshape([conf.shape[0]]).dataSync();
 
-    return { 
+    var output = { 
         bbox: bbox_result, 
         landm: landm_result, 
         landm_valid: landm_valid, 
         conf: conf,
         size: bbox.shape[0]
     };
+
+    return output;
 };
 
-const detect_face = async (canvas_id, scale_down_factor, max_steps, width, height) => {
+// TF NMS
+const tf_nms = (output, iou_thresh) => {
+    var { max, min } = Math;
+    var {bbox, landm, landm_valid, conf, size} = output;
+    var foundLocations = [];
+    var pick = [];
+
+    for(var i = 0; i < size; i++) {
+        var x1 = bbox[i][0],
+            y1 = bbox[i][1],
+            x2 = bbox[i][2],
+            y2 = bbox[i][3];
+
+        var width = x2 - x1,
+            height = y2 - y1;
+        
+        if(width > 0 && height > 0) {
+            var area = width * height;
+            foundLocations.push({x1,y1,x2,y2,width,height,area,index: i});
+        }
+    }
+
+    foundLocations.sort((b1, b2) => {
+        return b1.y2 - b2.y2;
+    });
+
+    while(foundLocations.length > 0) {
+        var last = foundLocations[foundLocations.length - 1];
+        var suppress = [last];
+        pick.push(foundLocations.length - 1);
+
+        for(let i = 0; i < foundLocations.length; i++) {
+            const box = foundLocations[i];
+            const xx1 = max(box.x1, last.x1);
+            const yy1 = max(box.y1, last.y1);
+            const xx2 = min(box.x2, last.x2);
+            const yy2 = min(box.y2, last.y2);
+            const w = max(0, xx2 - xx1);
+            const h = max(0, yy2 - yy1);
+            const overlap = (w*h) / box.area;
+
+            if(overlap > iou_thresh)
+                suppress.push(foundLocations[i]);
+        }
+
+        foundLocations = foundLocations.filter((box) => {
+            return !suppress.find((supp) => {
+                return supp === box;
+            })
+        });
+    }
+
+    var result_bbox = [],
+        result_scores = [],
+        result_landms = [],
+        result_valid = [];
+
+    pick.forEach((pick_index, i) => {
+        result_bbox.push([]);
+        for(var j = 0; j < 4; j++)
+            result_bbox[i].push(bbox[pick_index][j]);
+        
+        result_scores.push(conf[pick_index]);
+        result_valid.push(landm_valid[pick_index]);
+
+        result_landms.push([]);
+        for(var j = 0; j < 10; j++)
+            result_landms[i].push(landm[pick_index][j]);
+    });
+
+    return {bbox: result_bbox, landm: result_landms, landm_valid: result_valid, conf: result_scores, size: pick.length};
+};
+
+const detect_face = async (canvas_id, resnet_backbone, scale_down_factor, max_steps, width, height, config) => {
 
     // Get the source image
     var src = cv.imread(canvas_id);
@@ -181,7 +255,7 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps, width, heigh
     var img_h = img.size().height;
 
     // Convert into Tensor with 800x600
-    var tensor = convertopencvmattotensor(resize_image_resolution(img));
+    var tensor = convertopencvmattotensor(img);
     result_image.delete();
 
     //var resize_tensor = tf.image.resizeBilinear(tensor, [800, 600]);
@@ -191,20 +265,11 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps, width, heigh
     console.log('Loading Model');
 
     //console.log(respredictionult);
-    const resnet_backbone = await tf.loadLayersModel(config.url);
-    var detection_result = await detection(tensor, resnet_backbone, config);
-    var {bbox, landm, landm_valid, conf, size} = recover_pad_output(detection_result, param, tensor.shape[2], tensor.shape[1]);
+    var detection_result = await tensorflow_detection(tensor, resnet_backbone, config);
 
-    // Debugging Purpose
-    /*
-    console.log(`Bound Box Result (shape = ${detection_result.bbox.shape})`);
-    detection_result.bbox.print();
-    console.log(`Landmark Result (shape = ${detection_result.landm.shape})`);
-    detection_result.landm.print();
-    console.log(`Confidence Result (shape = ${detection_result.conf.shape})`);
-    detection_result.conf.print();
-    */
-
+    var recovered_output = recover_pad_output(detection_result, param, width, height); //, tensor.shape[2], tensor.shape[1]);
+    var {bbox, landm, landm_valid, conf, size} = tf_nms(recovered_output, config.iou_thresh);
+    
     // Dispose
     tensor.dispose();
     detection_result.dispose();
@@ -216,7 +281,6 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps, width, heigh
 // Draw in each loop
 const drawbbox_landmark = (ctx, output) => {
     var {bounding_box, landmark, landmark_valid, conf, size} = output;
-    var context = ctx;
 
     for(var index = 0; index < size; index++) {
         console.log(`Conf ${index + 1}: ${conf[index]}`);
@@ -247,20 +311,6 @@ const drawbbox_landmark = (ctx, output) => {
                 ctx.stroke();
             }
     }
-};
-
-// Configuration
-const config = {
-    input_size: [800, 600],
-    min_size: [[16, 32], [64, 128], [256, 512]],
-    out_ch: 256,
-    url: 'model/Backbone/model.json',
-    steps: [8, 16, 32],
-    variances: [0.1, 0.2],
-    iou_thresh: 0.4,
-    score_thresh: 0.02,
-    clip: false,
-    weight: "model/weights.json"
 };
 
 //"model/weights.json"

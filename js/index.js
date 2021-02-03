@@ -53,27 +53,27 @@ const onstopbuttonclick = (event) => {
 const oncapturefaceclick =  async (event) => {
     event.preventDefault();
 
+    // Get Mode lType
+    var framework = document.getElementById("framework");
+    var predictions = null;
+
     // Get image from canvas
     var canvas = document.getElementById("main-canvas-area");
     var ctx = canvas.getContext("2d");
 
-    // Model Selection
-    var model_select = document.getElementById('model');
-    var model_path = config.model[parseInt(model_select.value)];
+    if(framework.value == '0' ) {        // ONNX
+        // Prepare Image
+        console.log('Prepare Image');
+        var prepared_data = prepare_image('main-canvas-area');
 
-    // Load model
-    console.log(`Model Path = ${model_path}`);
-    const session = new onnx.InferenceSession({ backendHint: 'wasm' });    //wasm
-    await session.loadModel(model_path); //'./model/ResNet50.onnx');
-    console.log('Finish Loading Model');
+        predictions = await detection(prepared_data.resize_image, window.session, prepared_data.resize_ratio, onnx_config);
+            
+        drawoutputtocanvas(predictions, ctx);    
+    } else if(framework.value == '1') {     // Tensorflow.js
+        predictions = await detect_face('main-canvas-area', window.resnet_backbone, 1, 32, canvas.width, canvas.height, tensorflow_config);
 
-    // Prepare Image
-    console.log('Prepare Image');
-    var prepared_data = prepare_image('main-canvas-area');
-
-    var predictions = await detection(prepared_data.resize_image, session, prepared_data.resize_ratio, config);
-    
-    drawoutputtocanvas(predictions, ctx);
+        drawbbox_landmark(ctx, predictions);
+    }
 };
 
 const onbrowsechange = (event) => {
@@ -89,6 +89,23 @@ const onbrowsechange = (event) => {
     }
     
     img.src = URL.createObjectURL(event.target.files[0]);
+};
+
+const onloadmodelclick = async (event) => {
+    if(framework.value == '0') {        // ONNX
+        // Model Selection
+        var model_select = document.getElementById('model');
+        var model_path = onnx_config.model[parseInt(model_select.value)];
+
+        // Load model
+        console.log(`Model Path = ${model_path}`);
+        window.session = new onnx.InferenceSession({ backendHint: 'wasm' });    //wasm
+        await window.session.loadModel(model_path); //'./model/ResNet50.onnx');
+    } else if(framework.value == '1') {     // Tensorflow.js
+        window.resnet_backbone = await tf.loadLayersModel(tensorflow_config.url);
+    }
+
+    console.log('Finish Loading Model');
 };
 
 async function make_base()
@@ -110,7 +127,10 @@ capture_face.addEventListener('click', oncapturefaceclick);
 var browsefile = document.getElementById('browseimage');
 browsefile.addEventListener('change', onbrowsechange);
 
-var config = {
+var load_model_btn = document.getElementById('load-model');
+load_model_btn.addEventListener('click', onloadmodelclick);
+
+var onnx_config = {
     name: 'Resnet50',
     min_sizes: [[16, 32], [64, 128], [256, 512]],
     steps: [8, 16, 32],
@@ -134,5 +154,21 @@ var config = {
     nms_threshold: 0.4,
     model: ["./model/ResNet50.onnx", "./model/Mobile0.25.onnx"]
 };
+
+// Configuration
+var tensorflow_config = {
+    input_size: [800, 600],
+    min_size: [[16, 32], [64, 128], [256, 512]],
+    out_ch: 256,
+    url: 'model/backbone_model/model.json',
+    steps: [8, 16, 32],
+    variances: [0.1, 0.2],
+    iou_thresh: 0.4,
+    score_thresh: 0.02,
+    top_k: 5000,
+    clip: false,
+    weight: "model/weights_total.json"
+};
+
 
 make_base();

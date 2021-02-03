@@ -54,14 +54,22 @@ class BatchNormalization extends tf.layers.batchNormalization {
     }
 
     call(input, training = false) {
-        var train = null;
+        return tf.tidy(() => {
+            
+            var train = tf.scalar(training);
 
-        if(!training)
-            train = tf.scalar(false)
+            if(training == null)
+                train = tf.scalar(false)
+            
+            var training = train && this.trainable;
+    
+            return this.apply(input, training);
+        });
         
-        train = train && this.trainable;
+    }
 
-        return this.apply(input, train);
+    static get className() {
+        return 'BN';
     }
 }
 /*
@@ -104,7 +112,7 @@ class ConvUnit extends tf.layers.Layer {
         super(config);
         var weight = config.weight;
 
-        var temp_weight = weight[nameconv][0].data;
+        var temp_weight = weight[nameconv][0].weight;
         var conv_weight = tf.tensor(temp_weight);
         var bias_conv = tf.zeros([config.f]);
 
@@ -124,26 +132,14 @@ class ConvUnit extends tf.layers.Layer {
         });
 
         var bn_weight = weight[namebn];
+
         this.weights_bn = [];
 
         for(var index = 0; index < bn_weight.length; index++)
-            this.weights_bn.push(tf.tensor(bn_weight[index].data));
+            this.weights_bn.push(tf.tensor(bn_weight[index].weight));
 
         this.bn = new BatchNormalization(config, -1, 0.9, 1e-5, true, true, namebn, this.weights_bn);
-        /*
-        this.bn = tf.layers.batchNormalization({
-            name : namebn,
-            axis : -1,
-            momentum: 0.9,
-            epsilon: 1e-5,
-            center: true,
-            scale: true,
-            weights: this.weights_bn
-        });*/
 
-
-
-        
         if (config.act == null)
             this.activation = null;
         else if (config.act = 'relu')
@@ -190,8 +186,6 @@ class FPN extends tf.layers.Layer {
         var act = 'relu';
         if(out_ch <= 64)
             act = 'lrelu';
-    
-        var weight = config.weight;
 
         this.output1 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act, weight: config.weight} , 'FPNconv1',  'FPNbn1');
         this.output2 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act, weight: config.weight}, 'FPNconv2',  'FPNbn2');
@@ -291,7 +285,7 @@ class BboxHead extends tf.layers.Layer {
             kernelSize: 1,
             strides: 1, 
             name: name,
-            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+            weights: [tf.tensor(weight[name][0].weight), tf.tensor(weight[name][1].weight)]
         });        
     }
 
@@ -324,7 +318,7 @@ class LandmarkHead extends tf.layers.Layer {
             kernelSize: 1,
             strides: 1, 
             name: name,
-            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+            weights: [tf.tensor(weight[name][0].weight), tf.tensor(weight[name][1].weight)]
         });        
     }
 
@@ -355,7 +349,7 @@ class ClassHead extends tf.layers.Layer {
             kernelSize: 1,
             strides: 1, 
             name: name,
-            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+            weights: [tf.tensor(weight[name][0].weight), tf.tensor(weight[name][1].weight)]
         });        
     }
 
@@ -380,6 +374,7 @@ tf.serialization.registerClass(BboxHead);
 tf.serialization.registerClass(LandmarkHead);
 tf.serialization.registerClass(ClassHead);
 tf.serialization.registerClass(L2);
+tf.serialization.registerClass(BatchNormalization);
 
 // Meshgrid
 const meshgrid_tf = (x,y) => {
@@ -423,8 +418,8 @@ const prior_box_tf = async (image_sizes, min_sizes, steps, clip = false)=> {
         const feature_1 = feature_maps[k][1];
         const [grid_x, grid_y] = meshgrid_tf(tf.range(0, feature_1), tf.range(0, feature_0));
 
-        const cx = tf.div(tf.mul(tf.add(grid_x, tf.scalar(0.5)), tf.scalar(steps[k]) ), (await img_sizes.array())[1]);
-        const cy = tf.div(tf.mul(tf.add(grid_y, tf.scalar(0.5)), tf.scalar(steps[k]) ), (await img_sizes.array())[0]);
+        const cx = tf.div(tf.mul(tf.add(grid_x, tf.scalar(0.5)), tf.scalar(steps[k]) ), (img_sizes.dataSync())[1]);
+        const cy = tf.div(tf.mul(tf.add(grid_y, tf.scalar(0.5)), tf.scalar(steps[k]) ), (img_sizes.dataSync())[0]);
 
         var stacked_cxcy = tf.stack([cx, cy], axis = -1);
         stacked_cxcy = tf.reshape(stacked_cxcy, [-1, 2]);
@@ -432,8 +427,8 @@ const prior_box_tf = async (image_sizes, min_sizes, steps, clip = false)=> {
         const min_sizes_shape = tf.tensor(min_sizes[k]).shape[0];
         var cxcy = await repeat_tf(stacked_cxcy, repeat = min_sizes_shape);
 
-        const sx = tf.div(tf.tensor(min_sizes[k]), (await img_sizes.array())[1]);
-        const sy = tf.div(tf.tensor(min_sizes[k]), (await img_sizes.array())[0]);
+        const sx = tf.div(tf.tensor(min_sizes[k]), (img_sizes.dataSync())[1]);
+        const sy = tf.div(tf.tensor(min_sizes[k]), (img_sizes.dataSync())[0]);
         const stacked_sxsy = tf.stack([sx, sy], 1);
 
         const repeatsxsy = await repeat_tf(stacked_sxsy.expandDims(), grid_x.shape[0] * grid_x.shape[1]);
@@ -452,36 +447,70 @@ const prior_box_tf = async (image_sizes, min_sizes, steps, clip = false)=> {
 
 const decode_tf = (pred, priors, variances) => {
     const bbox_labels = pred.slice([0,0],[-1, 4]);
-    const bbox = decode_bbox(bbox_labels, priors, variances);
+    const bbox = decode_bbox_result(bbox_labels, priors, variances);
 
     const landmark_labels = pred.slice([0,4],[-1,10]);
-    const landm = decode_landm(landmark_labels, priors, variances);
+    const landm = decode_landm_result(landmark_labels, priors, variances);
 
     const landm_valid = pred.slice([0,14],[-1,1]);
     const conf = pred.slice([0,15],[-1,1]);
 
+    console.log('Decoding');
+    console.log(bbox.dataSync());
+    console.log(landm.dataSync());
+    console.log(conf.dataSync());
+
     return tf.concat([bbox, landm, landm_valid, conf], axis = 1); //, axis = 1);
 };
 
-const decode_bbox = (pred, priors, variances) => {
-    var centers = tf.mul(tf.mul(tf.add(priors.slice([0,0],[-1,2]), pred.slice([0,0],[-1,2])), tf.scalar(variances[0])), priors.slice([0,2],[-1,-1]));
-    var sides = tf.mul(priors.slice([0,2],[-1,-1]), tf.mul(pred.slice([0,2],[-1,-1]), tf.scalar(variances[1])).exp() )
+const decode_bbox_result = (pred, priors, variances) => {
+    var before_priors = priors.slice([0,0],[-1,2]),
+        after_priors = priors.slice([0,2],[-1,2]);
+    var before_pred = pred.slice([0,0],[-1,2]),
+        after_pred = pred.slice([0,2],[-1,-1]);
 
-    return tf.concat([tf.div(tf.sub(centers, sides), tf.scalar(2)), tf.div(tf.add(centers, sides), tf.scalar(2))], axis = 1);
+    // Center
+    var centers = tf.add(before_priors, tf.mul(before_pred, tf.mul(after_priors, tf.scalar(variances[0]))));
+    
+    // Side
+    var sides = tf.mul(after_priors, tf.exp(tf.mul(after_pred, tf.scalar(variances[1])) ));
+
+    // Division
+    var post = tf.div(sides, tf.scalar(2));
+
+    // BBox
+    var bbox =  tf.concat([tf.sub(centers, post), tf.add(centers, post)], axis = 1);
+
+    return bbox;
 };
 
-const decode_landm = (pred, priors, variances) => {
-    var priors_arr = [priors.slice([0,0], [-1,2]), priors.slice([0,2], [-1,-1])];
+const decode_landm_result = (pred, priors, variances = [0.1, 0.2]) => {
+    var before_priors = priors.slice([0,0],[-1,2]),
+        after_priors = priors.slice([0,2],[-1,2]);
+    var variances_prior = tf.mul(after_priors, tf.scalar(variances[0]));
     var landm = [];
 
-    for(var i = 0; i < 5; i++)
-        landm.push(tf.add(tf.mul(tf.mul(pred.slice([0,2*i], [-1,2]), tf.scalar(variances[0]) ), priors_arr[1]), priors_arr[0]));
+    for(var i = 0; i < 5; i++) {
+        let temp = tf.mul( pred.slice([0,2*i], [-1,2]), variances_prior);
+        let result = tf.add(before_priors, temp);
+        landm.push(result);
+    }
 
     return tf.concat(landm, axis = 1);
 };
 
+const convert_bbox = (bbox) => {
+    // Convert into y1,x1 / y2,x2
+    var x1 = bbox.slice([0,0],[-1,1]),
+        y1 = bbox.slice([0,1],[-1,1]),
+        x2 = bbox.slice([0,2],[-1,1]),
+        y2 = bbox.slice([0,3],[-1,1]);
+
+    return tf.concat([y1,x1,y2,x2], axis = 1);
+};
+
 // RetinaFaceModel
-const detection = async (input, resnet_backbone, config) => {
+const tensorflow_detection = async (input, resnet_backbone, config) => {
     const backbone = resnet_backbone.predict(input);
     
     // Weight
@@ -521,14 +550,13 @@ const detection = async (input, resnet_backbone, config) => {
 
     var priors = await prior_box_tf([input.shape[2], input.shape[1]], config.min_size, config.steps, config.clip);
     var decode_preds = await decode_tf(preds_result, priors, config.variances);
+    var boxes_before = convert_bbox(decode_preds.slice([0,0],[-1, 4]));
+    var scores_before = decode_preds.slice([0,15],[-1,1]);
+    //var landms_before = decode_preds.slice([0,4],[-1,10]);
 
     // NMS
-    var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes = decode_preds.slice([0,0],[-1, 4]), scores = decode_preds.slice([0,15],[-1,1]).squeeze(), maxOutputSize = decode_preds.shape[0], iouThreshold = config.iou_thresh, scoreThreshold = config.score_thresh);
+    var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes_before, scores_before.squeeze(), decode_preds.shape[0], config.iou_thresh, config.score_thresh);
     var output = tf.gather(decode_preds, selected_indices);
-
-    // Show result
-    console.log('Getting Result');
-    output.print();
 
     // Dispose
     preds.dispose();
@@ -542,69 +570,3 @@ const detection = async (input, resnet_backbone, config) => {
 
     return output;
 };
-
-/*
-const detection = async (tensor, resnet_backbone, config) => {
-    
-    var weight = await load_weight(config.weight);
-    console.log(weight);
-    //var result = find_weight(data, 'FPNconv1','kernel:0');
-    //console.log(result);
-
-    var output = resnet_backbone.predict(tensor, { batchSize: 1 });
-    console.log('Backbone Model predict successfully.');
-
-    var fpn_output = FPN(output, config, weight);
-    console.log('FPN predict successfully.');
-
-    var features = fpn_output.map((f, i) => SSH(f, config, weight, i));
-    console.log('SSH predict successfully.');
-
-    var num_anchor = config.min_size[0].length;
-    var bbox_regressions = tf.concat(features.map((f, i) => BboxHead(f, num_anchor, weight, i)), axis = 1);
-    var landm_regressions = tf.concat(features.map((f, i) => LandmarkHead(f, num_anchor, weight, i)), axis = 1);
-    var classifications = tf.concat(features.map((f, i) => ClassHead(f, num_anchor, weight, i)), axis = 1);
-    var classify_result = classifications.softmax();
-    var total_result = classify_result.shape[1];  // 10k
-    
-    console.log('Regression and Classification Successfully.');
-
-    // Show Result
-    var first_arr = classify_result.slice([0,0,0], [1, -1, 1]);
-    var second_arr = classify_result.slice([0,0,1], [1, -1, 1]);
-
-    var preds = tf.concat([bbox_regressions, landm_regressions, tf.onesLike(first_arr) , second_arr], axis = 2);
-    var preds_result = preds.reshape([ total_result, preds.shape[2] ]);
-    preds.dispose();
-
-    var priors = await prior_box_tf([tensor.shape[2], tensor.shape[1]], config.min_size, config.steps, config.clip);
-    var decode_preds = await decode_tf(preds_result, priors, config.variances);
-
-    // NMS
-    var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes = decode_preds.slice([0,0],[-1, 4]), scores = decode_preds.slice([0,15],[-1,1]).squeeze(), maxOutputSize = decode_preds.shape[0], iouThreshold = config.iou_thresh, scoreThreshold = config.score_thresh);
-    var output = tf.gather(decode_preds, selected_indices);
-
-    console.log('Getting Result');
-    output.print();
-    // Result
-    /*
-    decode_preds.bbox = tf.gather(decode_preds.bbox, selected_indices);
-    decode_preds.landm = tf.gather(decode_preds.landm, selected_indices);
-    decode_preds.landm_valid = tf.gather(decode_preds.landm_valid, selected_indices);
-    decode_preds.conf = tf.gather(decode_preds.conf, selected_indices);
-    */
-
-    // Dispose
-    /*
-    preds.dispose();
-    bbox_regressions.dispose();
-    landm_regressions.dispose();
-    classifications.dispose();
-    classify_result.dispose();
-    first_arr.dispose(); second_arr.dispose();
-    preds.dispose();
-    selected_indices.dispose();
-
-    // Return
-    return output;
-};*/
