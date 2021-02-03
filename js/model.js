@@ -1,11 +1,114 @@
+/* 
+    Load Weight
+*/
+const load_json = (json) => new Promise((resolve, reject) => {
+    var xobj = new XMLHttpRequest();
+    xobj.overrideMimeType("application/json");
+    try {
+        xobj.open('GET',json, true); // Replace 'my_data' with the path to your file
+        xobj.onreadystatechange = function () {
+            if (xobj.readyState == 4 && xobj.status == "200") {
+            // Required use of an anonymous callback as .open will NOT return a value but simply returns undefined in asynchronous mode
+                var data = JSON.parse(xobj.responseText);
+                var obj = {}
+                
+                for(var index = 0; index < data.length; index++) {
+                    var result = data[index];
+                    obj[result.name] = result.weight;
+                }
+
+                resolve(obj);
+            }
+        };
+        xobj.send(null);
+    } catch(err) {
+        reject(err);
+    }
+});
+
+const load_weight = async (weight) => {
+    const data = await load_json(`${weight}`);
+    return data;
+};
+
+const find_weight = (weight, name) => {
+    const data = weight.find(element => element.name == name);
+
+    return data;
+}
+/*
+    Batchnormalizatiomn
+*/
+class BatchNormalization extends tf.layers.batchNormalization {
+    constructor(config, axis=-1, momentum=0.9, epsilon=1e-5, center=true, scale=true, name='BNlayer', weights_bn = []) {
+        super({
+            ...config,
+            axis : axis,
+            momentum: momentum,
+            epsilon: epsilon,
+            center: center,
+            scale: scale,
+            weights: weights_bn,
+            name: name
+        });
+    }
+
+    call(input, training = false) {
+        var train = null;
+
+        if(!training)
+            train = tf.scalar(false)
+        
+        train = train && this.trainable;
+
+        return this.apply(input, train);
+    }
+}
+/*
+class BatchNormalization(tf.keras.layers.BatchNormalization):
+    """Make trainable=False freeze BN for real (the og version is sad).
+       ref: https://github.com/zzh8829/yolov3-tf2
+    """
+    def __init__(self, axis=-1, momentum=0.9, epsilon=1e-5, center=True,
+                 scale=True, name=None, **kwargs):
+        super(BatchNormalization, self).__init__(
+            axis=axis, momentum=momentum, epsilon=epsilon, center=center,
+            scale=scale, name=name, **kwargs)
+
+    def call(self, x, training=False):
+        if training is None:
+            training = tf.constant(False)
+        training = tf.logical_and(training, self.trainable)
+
+        return super().call(x, training)
+
+*/
+
+/* L2 regularizer */
+class L2 {
+
+    static className = 'L2';
+
+    constructor(config) {
+       return tf.regularizers.l1l2(config)
+    }
+}
+
 /*
     Convolution Unit
     ===========================
     The function is used for convolutional layer.
 */
 class ConvUnit extends tf.layers.Layer {
-    constructor(config, nameconv = 'conv', namebn = 'bn', weights = []) { //f, k, s, act = null, name = 'ConvBN') {
-        super({});
+    constructor(config, nameconv = 'conv', namebn = 'bn') { //}, weights = []) { //f, k, s, act = null, name = 'ConvBN') {
+        super(config);
+        var weight = config.weight;
+
+        var temp_weight = weight[nameconv][0].data;
+        var conv_weight = tf.tensor(temp_weight);
+        var bias_conv = tf.zeros([config.f]);
+
+        this.conv_weights = [conv_weight, bias_conv];
 
         this.conv = tf.layers.conv2d({
             filters: config.f,
@@ -14,13 +117,33 @@ class ConvUnit extends tf.layers.Layer {
             padding:'same',
             dataFormat: 'channelsLast',
             kernelInitializer: 'heNormal',
-            kernelRegularizer: 'l1l2',
+            kernelRegularizer: 'L2',
             use_bias: false,
-            name: nameconv
+            name: nameconv,
+            weights: this.conv_weights
         });
 
-        this.bn = tf.layers.batchNormalization({name : namebn});
+        var bn_weight = weight[namebn];
+        this.weights_bn = [];
 
+        for(var index = 0; index < bn_weight.length; index++)
+            this.weights_bn.push(tf.tensor(bn_weight[index].data));
+
+        this.bn = new BatchNormalization(config, -1, 0.9, 1e-5, true, true, namebn, this.weights_bn);
+        /*
+        this.bn = tf.layers.batchNormalization({
+            name : namebn,
+            axis : -1,
+            momentum: 0.9,
+            epsilon: 1e-5,
+            center: true,
+            scale: true,
+            weights: this.weights_bn
+        });*/
+
+
+
+        
         if (config.act == null)
             this.activation = null;
         else if (config.act = 'relu')
@@ -45,126 +168,218 @@ class ConvUnit extends tf.layers.Layer {
     }
 }
 
-// Functional Pyramid Network
-const FPN = (input, config) => {
-    var act = 'relu';
-    if(config.out_ch <= 64)
-        act = 'lrelu';
 
-    var out_ch = config.out_ch;
-
-    var cnn_output1 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act} , nameconv = 'FPNconv1', namebn = 'FPNbn1');
-    var cnn_output2 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act}, nameconv = 'FPNconv2', namebn = 'FPNbn2');
-    var cnn_output3 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act}, nameconv = 'FPNconv3', namebn = 'FPNbn3');
-    var merge1 = new ConvUnit({f: out_ch, k: 3, s: 1, act:act}, nameconv = 'FPNconv3_1', namebn = 'FPNbn3_1');
-    var merge2 = new ConvUnit({f: out_ch, k: 3, s: 1, act:act}, nameconv = 'FPNconv3_2', namebn = 'FPNbn3_2');
-
-    return tf.tidy(() => {
-        var output1 = cnn_output1.apply(input[0]);
-        var output2 = cnn_output2.apply(input[1]);
-        var output3 = cnn_output3.apply(input[2]);
-
-        var up_h = output2.shape[1]; var up_w = output2.shape[2];
-        var up3 = tf.image.resizeNearestNeighbor(output3, [up_h, up_w]);
-        output2 = output2.add(up3);
-        output2 = merge2.apply(output2);
-        up3.dispose();
-
-        var up_h = output1.shape[1]; var up_w = output1.shape[2];
-        var up2 = tf.image.resizeNearestNeighbor(output2, [up_h, up_w]);
-        output1 = output1.add(up2);
-        output1 = merge1.apply(output1);
-        up2.dispose();
-
-        return [output1, output2, output3];
-    });
+const Backbone = (predictor) => {
+    const network = predictor;
+    
+    const backbone = (input) => {
+        const output = network.predict(input);
+        return tf.model({
+            input: input,
+            output: output
+        })
+    };
+    
+    return backbone;
 };
 
-// SSH
-const SSH = (input, config, num = 0) => {
-    var act = 'relu';
-    if(config.out_ch <= 64)
-        act = 'lrelu';
+class FPN extends tf.layers.Layer {
+    constructor(config) {
+        super(config);
+        var out_ch = config.out_ch;
+        var act = 'relu';
+        if(out_ch <= 64)
+            act = 'lrelu';
+    
+        var weight = config.weight;
 
-    var i = num.toString();
-    var out_ch = config.out_ch;
-    var cnn_conv_3x3 = new ConvUnit({f: Math.floor(out_ch / 2), k: 3, s: 1, act:null}, nameconv = 'SSHconv4_' + i, namebn = 'SSHbn4_' + i);
+        this.output1 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act, weight: config.weight} , 'FPNconv1',  'FPNbn1');
+        this.output2 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act, weight: config.weight}, 'FPNconv2',  'FPNbn2');
+        this.output3 = new ConvUnit({f: out_ch, k: 1, s: 1, act:act, weight: config.weight}, 'FPNconv3', 'FPNbn3');
+        this.merge1 = new ConvUnit({f: out_ch, k: 3, s: 1, act:act, weight: config.weight}, 'FPNconv3_1', 'FPNbn3_1');
+        this.merge2 = new ConvUnit({f: out_ch, k: 3, s: 1, act:act, weight: config.weight}, 'FPNconv3_2', 'FPNbn3_2');     
+    
+    }
 
-    var cnn_conv_5x5_1 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:act}, nameconv = 'SSHconv5_' + i, namebn = 'SSHbn5_' + i);
-    var cnn_conv_5x5_2 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:null}, nameconv = 'SSHconv6_' + i, namebn = 'SSHbn6_' + i);
+    call(input) {
+        return tf.tidy(() => {
+            console.log('FPN');
+            var output1 = this.output1.apply(input[0]);
+            var output2 = this.output2.apply(input[1]);
+            var output3 = this.output3.apply(input[2]);
+    
+            var up_h = output2.shape[1]; var up_w = output2.shape[2];
+            var up3 = tf.image.resizeNearestNeighbor(output3, [up_h, up_w]);
+            output2 = output2.add(up3);
+            output2 = this.merge2.apply(output2);
+            up3.dispose();
+    
+            var up_h = output1.shape[1]; var up_w = output1.shape[2];
+            var up2 = tf.image.resizeNearestNeighbor(output2, [up_h, up_w]);
+            output1 = output1.add(up2);
+            output1 = this.merge1.apply(output1);
+            up2.dispose();
+    
+            return [output1, output2, output3];
+        });
+    }
 
-    var cnn_conv_7x7_2 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:act}, nameconv = 'SSHconv7_' + i, namebn = 'SSHbn7_' + i);
-    var cnn_conv_7x7_3 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:null}, nameconv = 'SSHconv8_' + i, namebn = 'SSHbn8_' + i);
+    static get className() {
+        return 'FPN';
+    }
+}
 
-    var relu = tf.layers.reLU();
+class SSH extends tf.layers.Layer {
+    constructor(config) {
+        super(config);
 
-    return tf.tidy(() => {
-        var conv_3x3 = cnn_conv_3x3.apply(input);
+        var out_ch = config.out_ch;
+        var act = 'relu';
+        if(out_ch <= 64)
+            act = 'lrelu';
+    
+        var i = config.num.toString();
 
-        var conv_5x5_1 = cnn_conv_5x5_1.apply(input);
-        var conv_5x5 = cnn_conv_5x5_2.apply(conv_5x5_1);
+        this.conv_3x3 = new ConvUnit({f: Math.floor(out_ch / 2), k: 3, s: 1, act:null, weight: config.weight}, 'SSHconv4_' + i, 'SSHbn4_' + i);
+    
+        this.conv_5x5_1 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:act, weight: config.weight}, 'SSHconv5_' + i, 'SSHbn5_' + i);
+        this.conv_5x5_2 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:null, weight: config.weight}, 'SSHconv6_' + i, 'SSHbn6_' + i);
+    
+        this.conv_7x7_2 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:act, weight: config.weight}, 'SSHconv7_' + i, 'SSHbn7_' + i);
+        this.conv_7x7_3 = new ConvUnit({f: Math.floor(out_ch / 4), k: 3, s: 1, act:null, weight: config.weight}, 'SSHconv8_' + i, 'SSHbn8_' + i);
+    
+        this.relu = tf.layers.reLU();    
+    }
 
-        var conv_7x7_2 = cnn_conv_7x7_2.apply(conv_5x5_1);
-        var conv_7x7 = cnn_conv_7x7_3.apply(conv_7x7_2);
+    call(input) {
+        return tf.tidy(() => {
+            console.log('SSH');
+            var conv_3x3 = this.conv_3x3.apply(input);
 
-        var output = tf.concat([conv_3x3, conv_5x5, conv_7x7], axis = 3);
-        output = relu.apply(output);
+            var conv_5x5_1 = this.conv_5x5_1.apply(input);
+            var conv_5x5 = this.conv_5x5_2.apply(conv_5x5_1);
 
-        return output;
-    });
-};
+            var conv_7x7_2 = this.conv_7x7_2.apply(conv_5x5_1);
+            var conv_7x7 = this.conv_7x7_3.apply(conv_7x7_2);
 
-const BboxHead = (input, num_anchor, num = 0) => {
-    var i = num.toString();
+            var output = tf.concat([conv_3x3, conv_5x5, conv_7x7], 3);
 
-    const conv = tf.layers.conv2d({
-        filters: num_anchor * 4,
-        kernelSize: 1,
-        strides: 1, 
-        name: 'Bboxconv_' + i
-    });
+            output = this.relu.apply(output);
 
-    //(filters=num_anchor * 4, kernel_size=1, strides=1, name = 'Bboxconv_' + i)
-    return tf.tidy(() => {
-        h = input.shape[1]; w = input.shape[2];
-        x = conv.apply(input);
-        return tf.reshape(x, [-1, h * w * num_anchor, 4]);
-    });
-};
+            return output;
+        });    
 
-const LandmarkHead = (input, num_anchor, num = 0) => {
-    var i = num.toString();
+    }
 
-    const conv = tf.layers.conv2d({
-        filters: num_anchor * 10,
-        kernelSize: 1,
-        strides: 1, 
-        name: 'Landmconv_' + i
-    });
+    static get className() {
+        return 'SSH';
+    }
+}
 
-    return tf.tidy(() => {
-        h = input.shape[1]; w = input.shape[2];
-        x = conv.apply(input);
-        return tf.reshape(x, [-1, h * w * num_anchor, 10]);
-    });
-};
+class BboxHead extends tf.layers.Layer {
+    constructor(config) {
+        super(config);
+        var i = config.num.toString();
+        var weight = config.weight;
 
-const ClassHead = (input, num_anchor, num = 0) => {
-    var i = num.toString();
+        this.num_anchor = config.numAnchor;
 
-    const conv = tf.layers.conv2d({
-        filters: num_anchor * 2,
-        kernelSize: 1,
-        strides: 1, 
-        name: 'Classconv_' + i
-    });
+        const name = 'Bboxconv_' + i;
+        
+        this.conv = tf.layers.conv2d({
+            filters: this.num_anchor * 4,
+            kernelSize: 1,
+            strides: 1, 
+            name: name,
+            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+        });        
+    }
 
-    return tf.tidy(() => {
-        h = input.shape[1]; w = input.shape[2];
-        x = conv.apply(input);
-        return tf.reshape(x, [-1, h * w * num_anchor, 2]);
-    });
-};
+    call (input) {
+        return tf.tidy(() => {
+            console.log('BBoxHead');
+            var h = input.shape[1]; var w = input.shape[2];
+            var x = this.conv.apply(input);
+            return tf.reshape(x, [-1, h * w * this.num_anchor, 4]);
+        });
+    }
+
+    static get className() {
+        return 'BboxHead';
+    }
+}
+
+class LandmarkHead extends tf.layers.Layer {
+    constructor(config) {
+        super(config);
+        var i = config.num.toString();
+        var weight = config.weight;
+
+        this.num_anchor = config.numAnchor;
+
+        const name = 'Landmconv_' + i;
+        
+        this.conv = tf.layers.conv2d({
+            filters: this.num_anchor * 10,
+            kernelSize: 1,
+            strides: 1, 
+            name: name,
+            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+        });        
+    }
+
+    call (input) {
+        return tf.tidy(() => {
+            console.log('LandmarkHead');
+            var h = input.shape[1]; var w = input.shape[2];
+            var x = this.conv.apply(input);
+            return tf.reshape(x, [-1, h * w * this.num_anchor, 10]);
+        });
+    }
+
+    static get className() {
+        return 'LandmarkHead';
+    }
+}
+
+class ClassHead extends tf.layers.Layer {
+    constructor(config) {
+        super(config);
+        var weight = config.weight;
+        var i = config.num.toString();
+        this.num_anchor = config.numAnchor;
+        const name = 'Classconv_' + i;
+        
+        this.conv = tf.layers.conv2d({
+            filters: this.num_anchor * 2,
+            kernelSize: 1,
+            strides: 1, 
+            name: name,
+            weights: [tf.tensor(weight[name][0].data), tf.tensor(weight[name][1].data)]
+        });        
+    }
+
+    call (input) {
+        return tf.tidy(() => {
+            console.log('ClassHead');
+            var h = input.shape[1]; var w = input.shape[2];
+            var x = this.conv.apply(input);
+            return tf.reshape(x, [-1, h * w * this.num_anchor, 2]);
+        });
+    }
+
+    static get className() {
+        return 'ClassHead';
+    }
+}
+
+tf.serialization.registerClass(ConvUnit);
+tf.serialization.registerClass(FPN);
+tf.serialization.registerClass(SSH);
+tf.serialization.registerClass(BboxHead);
+tf.serialization.registerClass(LandmarkHead);
+tf.serialization.registerClass(ClassHead);
+tf.serialization.registerClass(L2);
 
 // Meshgrid
 const meshgrid_tf = (x,y) => {
@@ -266,21 +481,89 @@ const decode_landm = (pred, priors, variances) => {
 };
 
 // RetinaFaceModel
+const detection = async (input, resnet_backbone, config) => {
+    const backbone = resnet_backbone.predict(input);
+    
+    // Weight
+    var weight = config.weight;
+    var weights = await load_json(weight);
+
+    var FPNlayer = new FPN({...config, name: "FPN", weight: weights});
+    //FPNlayer.setWeights(fpn_weight);
+    var SSHlayer = [];
+    var BboxLayer = [];
+    var LandmarkLayer = [];
+    var ClassLayer = [];
+    var num_anchor = config.min_size[0].length;
+
+    for(var i = 0; i < 3; i++) {
+        SSHlayer.push(new SSH({...config, name: 'SSH', num: i, weight: weights}) );
+        BboxLayer.push(new BboxHead({...config, numAnchor: num_anchor, num: i, weight: weights}) );
+        LandmarkLayer.push(new LandmarkHead({...config, numAnchor: num_anchor, num: i, weight: weights}) );
+        ClassLayer.push(new ClassHead({...config, numAnchor: num_anchor, num: i, weight: weights}) );
+    }
+
+    const FPNresult = FPNlayer.apply(backbone);
+
+    const features = FPNresult.map((f, i) => SSHlayer[i].apply(f) );
+    const bbox_regressions = tf.concat(features.map((f, i) => BboxLayer[i].apply(f) ), axis = 1);
+    const landm_regressions = tf.concat(features.map((f, i) => LandmarkLayer[i].apply(f) ), axis = 1);
+    const classifications = tf.concat(features.map((f, i) => ClassLayer[i].apply(f) ), axis = 1);
+    const classify_result = classifications.softmax();
+    const total_result = classify_result.shape[1];
+
+    var first_arr = classify_result.slice([0,0,0], [1, -1, 1]);
+    var second_arr = classify_result.slice([0,0,1], [1, -1, 1]);
+
+    var preds = tf.concat([bbox_regressions, landm_regressions, tf.onesLike(first_arr) , second_arr], axis = 2);
+    var preds_result = preds.reshape([ total_result, preds.shape[2] ]);
+    preds.dispose();
+
+    var priors = await prior_box_tf([input.shape[2], input.shape[1]], config.min_size, config.steps, config.clip);
+    var decode_preds = await decode_tf(preds_result, priors, config.variances);
+
+    // NMS
+    var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes = decode_preds.slice([0,0],[-1, 4]), scores = decode_preds.slice([0,15],[-1,1]).squeeze(), maxOutputSize = decode_preds.shape[0], iouThreshold = config.iou_thresh, scoreThreshold = config.score_thresh);
+    var output = tf.gather(decode_preds, selected_indices);
+
+    // Show result
+    console.log('Getting Result');
+    output.print();
+
+    // Dispose
+    preds.dispose();
+    bbox_regressions.dispose();
+    landm_regressions.dispose();
+    classifications.dispose();
+    classify_result.dispose();
+    first_arr.dispose(); second_arr.dispose();
+    preds.dispose();
+    selected_indices.dispose();
+
+    return output;
+};
+
+/*
 const detection = async (tensor, resnet_backbone, config) => {
     
+    var weight = await load_weight(config.weight);
+    console.log(weight);
+    //var result = find_weight(data, 'FPNconv1','kernel:0');
+    //console.log(result);
+
     var output = resnet_backbone.predict(tensor, { batchSize: 1 });
     console.log('Backbone Model predict successfully.');
 
-    var fpn_output = FPN(output, config);
+    var fpn_output = FPN(output, config, weight);
     console.log('FPN predict successfully.');
 
-    var features = fpn_output.map((f, i) => SSH(f, config, i));
+    var features = fpn_output.map((f, i) => SSH(f, config, weight, i));
     console.log('SSH predict successfully.');
 
     var num_anchor = config.min_size[0].length;
-    var bbox_regressions = tf.concat(features.map((f, i) => BboxHead(f, num_anchor, i)), axis = 1);
-    var landm_regressions = tf.concat(features.map((f, i) => LandmarkHead(f, num_anchor, i)), axis = 1);
-    var classifications = tf.concat(features.map((f, i) => ClassHead(f, num_anchor, i)), axis = 1);
+    var bbox_regressions = tf.concat(features.map((f, i) => BboxHead(f, num_anchor, weight, i)), axis = 1);
+    var landm_regressions = tf.concat(features.map((f, i) => LandmarkHead(f, num_anchor, weight, i)), axis = 1);
+    var classifications = tf.concat(features.map((f, i) => ClassHead(f, num_anchor, weight, i)), axis = 1);
     var classify_result = classifications.softmax();
     var total_result = classify_result.shape[1];  // 10k
     
@@ -294,22 +577,15 @@ const detection = async (tensor, resnet_backbone, config) => {
     var preds_result = preds.reshape([ total_result, preds.shape[2] ]);
     preds.dispose();
 
-    //console.log('Predictions');
-
     var priors = await prior_box_tf([tensor.shape[2], tensor.shape[1]], config.min_size, config.steps, config.clip);
-
-    //console.log('Priors');
-    //priors.print();
-
     var decode_preds = await decode_tf(preds_result, priors, config.variances);
-
-    //console.log('Decode Predictions');
-    //decode_preds.print();
 
     // NMS
     var selected_indices = await tf.image.nonMaxSuppressionAsync(boxes = decode_preds.slice([0,0],[-1, 4]), scores = decode_preds.slice([0,15],[-1,1]).squeeze(), maxOutputSize = decode_preds.shape[0], iouThreshold = config.iou_thresh, scoreThreshold = config.score_thresh);
     var output = tf.gather(decode_preds, selected_indices);
 
+    console.log('Getting Result');
+    output.print();
     // Result
     /*
     decode_preds.bbox = tf.gather(decode_preds.bbox, selected_indices);
@@ -319,6 +595,7 @@ const detection = async (tensor, resnet_backbone, config) => {
     */
 
     // Dispose
+    /*
     preds.dispose();
     bbox_regressions.dispose();
     landm_regressions.dispose();
@@ -330,4 +607,4 @@ const detection = async (tensor, resnet_backbone, config) => {
 
     // Return
     return output;
-};
+};*/

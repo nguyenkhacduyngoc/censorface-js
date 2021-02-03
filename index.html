@@ -6,15 +6,23 @@
     <body>
         <video id = 'main-video-area' style = 'display:none' muted></video>
         <canvas id = 'main-canvas-area'></canvas>
-        <button id = 'open-video'>Open Camera</button>
+        
+        <select id = 'model' name = 'model'>
+            <option value = '0'>ResNet-50</option>
+            <option value = '1'>MobileNet0.25</option>
+        </select>
+        <input type = 'file' id = 'browseimage' />
         <button id = 'capture-face'>Capture Face</button>
-        <button id = 'stop-video'>Pause Camera</button>
 
         <script src = 'js/common.js'></script>
         <script src = 'js/opencv.js'></script>
-        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+        <!-- <script src="js/tfjs.min.js"></script>
         <script src = 'js/model.js'></script>
-        <script src = 'js/face.js'></script>
+        <script src = 'js/face.js'></script> -->
+        <script src = './onnx.min.js'></script>
+        <script src = './onnx-wasm.js'></script>
+        <script src = 'js/resize.js'></script>
+        <script src = 'js/ndarray-browser-min.js'></script>
         <script src = 'js/index.js'></script>
     </body>
 </html>

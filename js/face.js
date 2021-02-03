@@ -109,21 +109,59 @@ const load_model = (MODEL_URL, filename) =>
         }
     });
 
-const recover_pad_output = (outputs, pad_params) => {
+const recover_pad_output = (outputs, pad_params, width, height) => {
     var [img_h, img_w, img_pad_h, img_pad_w] = pad_params;
     var recover_value = tf.tensor([(img_pad_w + img_w) / img_w, (img_pad_h + img_h) / img_h]);
     var recover_xy = tf.mul(tf.reshape(outputs.slice([0,0], [-1,14]), [-1, 7, 2]), recover_value).reshape([-1, 14]);
 
-    var bbox = recover_xy.slice([0,0],[-1, 4])
-    var landm = recover_xy.slice([0,4],[-1,10]);
+    var bbox = recover_xy.slice([0,0],[-1, 4]);
+    var size = bbox.shape[0];
+    var landm = recover_xy.slice([0,4],[-1,10]).arraySync();
+
+    var temp_bbox = bbox.arraySync();
+
+    var bbox_result = [];
+    var landm_result = [];
+
+    for(var index = 0; index < size; index++) {
+
+        // Bounding Box
+        var temp = temp_bbox[index];
+        var x1 = temp[0] * width;
+        var x2 = temp[1] * height;
+        var y1 = temp[2] * width;
+        var y2 = temp[3] * height;
+        
+        bbox_result.push([x1, y1, x2, y2]);
+
+        // Landmark
+        landm_result.push([]);
+
+        var landmark = landm[index];
+        for(var landm_index = 0; landm_index < landmark.length; landm_index += 2) {
+            var x = landmark[landm_index] * width;
+            var y = landmark[landm_index + 1] * height;
+
+            landm_result[index].push([x,y]);
+        }
+    }
 
     var landm_valid = outputs.slice([0,14],[-1,1]);
-    var conf = outputs.slice([0,15],[-1,1]);
+    landm_valid = landm_valid.reshape([landm_valid.shape[0]]).arraySync();
 
-    return { bbox, landm, landm_valid, conf };
+    var conf = outputs.slice([0,15],[-1,1]);
+    conf = conf.reshape([conf.shape[0]]).arraySync();
+
+    return { 
+        bbox: bbox_result, 
+        landm: landm_result, 
+        landm_valid: landm_valid, 
+        conf: conf,
+        size: bbox.shape[0]
+    };
 };
 
-const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
+const detect_face = async (canvas_id, scale_down_factor, max_steps, width, height) => {
 
     // Get the source image
     var src = cv.imread(canvas_id);
@@ -135,23 +173,28 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
     var rgb_image = converttorgb(resized_image);
     resized_image.delete();
 
-    // Pad Image
-    var result = pad_input_image(rgb_image, max_steps);
+    // Pad Image with 800x608?
+    var result_image  = resize_image_resolution(rgb_image);
+    var result = pad_input_image(result_image, max_steps);
     var { img, param } = result;
+    var img_w = img.size().width;
+    var img_h = img.size().height;
 
-    // Convert into Tensor
-    result_image  = resize_image_resolution(img);
-    var tensor = convertopencvmattotensor(result_image);
+    // Convert into Tensor with 800x600
+    var tensor = convertopencvmattotensor(resize_image_resolution(img));
     result_image.delete();
 
     //var resize_tensor = tf.image.resizeBilinear(tensor, [800, 600]);
     console.log(`Image is converted into Tensor. Shape = ${tensor.shape[2]},${tensor.shape[1]}`);
 
     // Read Model and run
+    console.log('Loading Model');
+
+    //console.log(respredictionult);
     const resnet_backbone = await tf.loadLayersModel(config.url);
     var detection_result = await detection(tensor, resnet_backbone, config);
-    var output = recover_pad_output(detection_result, param);
-    console.log(`Padding parameter = ${param}`);
+    var {bbox, landm, landm_valid, conf, size} = recover_pad_output(detection_result, param, tensor.shape[2], tensor.shape[1]);
+
     // Debugging Purpose
     /*
     console.log(`Bound Box Result (shape = ${detection_result.bbox.shape})`);
@@ -162,16 +205,48 @@ const detect_face = async (canvas_id, scale_down_factor, max_steps) => {
     detection_result.conf.print();
     */
 
-    var bounding_box = output.bbox.array();
-    var landmark = output.landm.array();
-    var landmark_valid = output.landm_valid.array();
-    var conf = output.conf.array();
-
     // Dispose
     tensor.dispose();
+    detection_result.dispose();
 
     // Return
-    return {bounding_box, landmark, landmark_valid, conf, size: output.bbox.shape[0]}
+    return {bounding_box: bbox, landmark: landm, landmark_valid: landm_valid, conf, size};
+};
+
+// Draw in each loop
+const drawbbox_landmark = (ctx, output) => {
+    var {bounding_box, landmark, landmark_valid, conf, size} = output;
+    var context = ctx;
+
+    for(var index = 0; index < size; index++) {
+        console.log(`Conf ${index + 1}: ${conf[index]}`);
+
+        // BBox
+        var [x1, x2, y1, y2] = bounding_box[index];
+
+        // Draw
+        ctx.beginPath();
+        ctx.strokeStyle = '#2ecc71';
+        ctx.rect(x1, y1, (x2-x1), (y2-y1));
+        ctx.stroke();
+
+        // Confidence
+        ctx.font = `lighter 12px sans-serif`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`Conf: ${conf[index]}`, x1, y1);
+
+        // Landmark
+        if(landmark_valid[index] > 0) 
+            for(var landm_index = 0; landm_index < landmark[index].length; landm_index += 2) {
+                var [x, y] = landmark[index][landm_index];
+
+                ctx.beginPath();
+                ctx.strokeStyle = '#2ecc71';
+                ctx.arc(x, y, 1, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+    }
 };
 
 // Configuration
@@ -184,5 +259,9 @@ const config = {
     variances: [0.1, 0.2],
     iou_thresh: 0.4,
     score_thresh: 0.02,
-    clip: false
+    clip: false,
+    weight: "model/weights.json"
 };
+
+//"model/weights.json"
+//["FPN", "SSH_0", "SSH_1", "SSH_2", "ClassHead_0", "ClassHead_1", "ClassHead_2", "Bbox_0", "Bbox_1", "Bbox_2", "Landmark_0", "Landmark_1", "Landmark_2"]
