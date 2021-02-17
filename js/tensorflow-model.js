@@ -510,13 +510,16 @@ const convert_bbox = (bbox) => {
 };
 
 // RetinaFaceModel
-const tensorflow_detection = async (input, resnet_backbone, config) => {
+const tensorflow_detection = async (input, resnet_backbone, weight_id, config) => {
     const backbone = resnet_backbone.predict(input);
     
     // Weight
-    var weight = config.weight;
+    var weight = config.weight[weight_id];
     var weights = await load_json(weight);
 
+    console.log('Weight');
+    console.log(weights);
+    
     var FPNlayer = new FPN({...config, name: "FPN", weight: weights});
     //FPNlayer.setWeights(fpn_weight);
     var SSHlayer = [];

@@ -235,7 +235,7 @@ const tf_nms = (output, iou_thresh) => {
     return {bbox: result_bbox, landm: result_landms, landm_valid: result_valid, conf: result_scores, size: pick.length};
 };
 
-const detect_face = async (canvas_id, resnet_backbone, scale_down_factor, max_steps, width, height, config) => {
+const detect_face = async (canvas_id, resnet_backbone, weight_id, scale_down_factor, max_steps, width, height, config) => {
 
     // Get the source image
     var src = cv.imread(canvas_id);
@@ -265,7 +265,7 @@ const detect_face = async (canvas_id, resnet_backbone, scale_down_factor, max_st
     console.log('Loading Model');
 
     //console.log(respredictionult);
-    var detection_result = await tensorflow_detection(tensor, resnet_backbone, config);
+    var detection_result = await tensorflow_detection(tensor, resnet_backbone, weight_id, config);
 
     var recovered_output = recover_pad_output(detection_result, param, width, height); //, tensor.shape[2], tensor.shape[1]);
     var {bbox, landm, landm_valid, conf, size} = tf_nms(recovered_output, config.iou_thresh);

@@ -1,7 +1,25 @@
+const onstopcameraclick = (event) => {
+    var videoinput = document.getElementById('main-video-area');
+    var canvas = document.getElementById('main-canvas-area');
+    var stop_video = document.getElementById('clear-video-area');
+
+    var mediaStream = videoinput.srcObject;
+    var tracks = mediaStream.getTracks();
+
+    tracks.forEach(track => track.stop());
+
+    canvas.style.display = 'none';
+    stop_video.style.display = 'none';
+
+    location.reload();
+};
+
 const onmainbuttonclick = async (event) => {
 
     // Main video area
     var videoinput = document.getElementById('main-video-area');
+    var canvas = document.getElementById('main-canvas-area');
+    var stop_video = document.getElementById('clear-video-area');
 
     // Setting page size
     videoinput.width = 800;
@@ -13,9 +31,16 @@ const onmainbuttonclick = async (event) => {
 
     // Play video from webcam
     videoinput.play();
+
+    // Draw Canvas
+    drawcanvas_videoframe();
+    
+    // Show Canvas
+    canvas.style.display = '';
+    stop_video.style.display = '';
 };
 
-const drawcanvas_videoframe = () => {
+const drawcanvas_videoframe = async () => {
     var videoinput = document.getElementById('main-video-area');
     var canvas = document.getElementById('main-canvas-area');
     var ctx = canvas.getContext('2d');
@@ -30,6 +55,46 @@ const drawcanvas_videoframe = () => {
     // Draw Video
     ctx.drawImage(videoinput, 0, 0, canvas.width, canvas.height);
     
+    // INFERENCE
+    // ======================
+    // Get Model Type
+    var framework = document.getElementById("framework");
+    var predictions = null;
+
+    // Get image from canvas
+
+    try {
+        if(framework.value == '0' ) {        // ONNX
+            // Prepare Image
+            var prepared_data = prepare_image('main-canvas-area');
+
+            predictions = await detection(prepared_data.resize_image, window.session, prepared_data.resize_ratio, onnx_config);
+                
+            drawoutputtocanvas(predictions, ctx);    
+        } else if(framework.value == '1') {     // Tensorflow.js
+            var model_select = document.getElementById('model-select');
+            var model_id = parseInt(model_select.value);
+            predictions = await detect_face('main-canvas-area', window.resnet_backbone, model_id, 1, 32, canvas.width, canvas.height, tensorflow_config);
+
+            drawbbox_landmark(ctx, predictions);
+        }
+
+        hide_alert();
+    } catch(error) {
+        alert('We have a problem during inference.');
+        show_alert('We have a problem during inference.');
+        var videoinput = document.getElementById('main-video-area');
+        var stop_video = document.getElementById('clear-video-area');
+
+        var mediaStream = videoinput.srcObject;
+        var tracks = mediaStream.getTracks();
+
+        tracks.forEach(track => track.stop());
+
+        canvas.style.display = 'none';
+        stop_video.style.display = 'none';
+        return;
+    }
     requestAnimationFrame(drawcanvas_videoframe);
 };
 
@@ -53,7 +118,7 @@ const onstopbuttonclick = (event) => {
 const oncapturefaceclick =  async (event) => {
     event.preventDefault();
 
-    // Get Mode lType
+    // Get Model Type
     var framework = document.getElementById("framework");
     var predictions = null;
 
@@ -61,18 +126,39 @@ const oncapturefaceclick =  async (event) => {
     var canvas = document.getElementById("main-canvas-area");
     var ctx = canvas.getContext("2d");
 
-    if(framework.value == '0' ) {        // ONNX
-        // Prepare Image
-        console.log('Prepare Image');
-        var prepared_data = prepare_image('main-canvas-area');
+    try {
+        if(framework.value == '0' ) {        // ONNX
+            show_alert('Detecting by ONNX.js. Please wait...');
 
-        predictions = await detection(prepared_data.resize_image, window.session, prepared_data.resize_ratio, onnx_config);
-            
-        drawoutputtocanvas(predictions, ctx);    
-    } else if(framework.value == '1') {     // Tensorflow.js
-        predictions = await detect_face('main-canvas-area', window.resnet_backbone, 1, 32, canvas.width, canvas.height, tensorflow_config);
+            // Prepare Image
+            console.log('Prepare Image');
+            var prepared_data = prepare_image('main-canvas-area');
 
-        drawbbox_landmark(ctx, predictions);
+            predictions = await detection(prepared_data.resize_image, window.session, prepared_data.resize_ratio, onnx_config);
+                
+            drawoutputtocanvas(predictions, ctx);    
+        } else if(framework.value == '1') {     // Tensorflow.js
+            show_alert('Detecting by Tensorflow.js. Please wait...');
+
+            var model_select = document.getElementById('model-select');
+            var model_id = parseInt(model_select.value);
+            predictions = await detect_face('main-canvas-area', window.resnet_backbone, model_id, 1, 32, canvas.width, canvas.height, tensorflow_config);
+
+            drawbbox_landmark(ctx, predictions);
+        }
+
+        alert('Detection complete.');
+        show_alert('Detection complete.');
+        hide_alert();
+		
+		var download_image_area = document.getElementById('download-image-area');
+		download_image_area.style.display = '';
+		
+		var download_image_btn = document.getElementById('download-image');
+		download_image_btn.addEventListener('click', downloadimagebtnclick);
+    } catch(error) {
+        alert('We found a problem during detecting.');
+        show_alert('We found a problem during detecting.');
     }
 };
 
@@ -80,34 +166,84 @@ const onbrowsechange = (event) => {
 
     var canvas = document.getElementById('main-canvas-area'),
         context = canvas.getContext('2d');
+    var remove_image_area = document.getElementById('clear-image-area');
     var img = new Image;
+
     img.onload = function() {
         context.clearRect(0, 0, canvas.width, canvas.height);
         canvas.width = img.width;
         canvas.height = img.height;
         context.drawImage(img, 0, 0);
+
+        canvas.style.display = '';
+        remove_image_area.style.display = '';
     }
     
     img.src = URL.createObjectURL(event.target.files[0]);
 };
 
 const onloadmodelclick = async (event) => {
-    if(framework.value == '0') {        // ONNX
-        // Model Selection
-        var model_select = document.getElementById('model');
-        var model_path = onnx_config.model[parseInt(model_select.value)];
+    show_alert('Loading model.');
 
-        // Load model
-        console.log(`Model Path = ${model_path}`);
-        window.session = new onnx.InferenceSession({ backendHint: 'wasm' });    //wasm
-        await window.session.loadModel(model_path); //'./model/ResNet50.onnx');
-    } else if(framework.value == '1') {     // Tensorflow.js
-        window.resnet_backbone = await tf.loadLayersModel(tensorflow_config.url);
+    try {
+        if(framework.value == '0') {        // ONNX
+            // Model Selection
+            var model_select = document.getElementById('model-select');
+            var model_path = onnx_config.model[parseInt(model_select.value)];
+
+            // Load model
+            console.log(`Model Path = ${model_path}`);
+            window.session = new onnx.InferenceSession({ backendHint: 'wasm' });    //wasm
+            await window.session.loadModel(model_path); //'./model/ResNet50.onnx');
+        } else if(framework.value == '1') {     // Tensorflow.js
+            var model_select = document.getElementById('model-select');
+            var model_id = parseInt(model_select.value);
+
+            window.resnet_backbone = await tf.loadLayersModel(tensorflow_config.url[model_id]);
+        }
+
+        show_alert('Finish loading model.');
+        alert('Finish Loading Model');
+        hide_alert();
+    } catch(error) {
+        console.error(error);
+        alert('We found an error during loading model.');
+        show_alert('We found an error during loading model.');
     }
-
-    console.log('Finish Loading Model');
 };
 
+const onclearimage = (event) => {
+    var canvas = document.getElementById('main-canvas-area');
+    var context = canvas.getContext('2d');
+    var remove_image_area = document.getElementById('clear-image-area');
+    var browsefile = document.getElementById('browseimage');
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    
+    canvas.style.display = 'none';
+    remove_image_area.style.display = 'none';
+
+    browsefile.value = '';
+};
+
+const downloadimagebtnclick = (event) => {
+	
+};
+
+const show_alert = (text) => {
+    var alert_area = document.getElementById('alert-area');
+    var alert_text = document.getElementById('alert-text');
+
+    alert_area.style.display = '';
+    alert_text.innerHTML = text;
+};
+
+const hide_alert = () => {
+    var alert_area = document.getElementById('alert-area');
+    alert_area.style.display = 'none';
+};
+
+/*
 async function make_base()
 {
     var canvas = document.getElementById('main-canvas-area'),
@@ -120,6 +256,7 @@ async function make_base()
         context.drawImage(base_image, 0, 0);
     }
 }
+*/
 
 var capture_face = document.getElementById('capture-face');
 capture_face.addEventListener('click', oncapturefaceclick);
@@ -127,8 +264,17 @@ capture_face.addEventListener('click', oncapturefaceclick);
 var browsefile = document.getElementById('browseimage');
 browsefile.addEventListener('change', onbrowsechange);
 
-var load_model_btn = document.getElementById('load-model');
-load_model_btn.addEventListener('click', onloadmodelclick);
+var load_model_area = document.getElementById('load-model-btn');
+load_model_area.addEventListener('click', onloadmodelclick);
+
+var clear_image_area = document.getElementById('clear-image');
+clear_image_area.addEventListener('click', onclearimage);
+
+var open_camera = document.getElementById('open-camera');
+open_camera.addEventListener('click', onmainbuttonclick);
+
+var stop_camera = document.getElementById('stop-capture');
+stop_camera.addEventListener('click', onstopcameraclick);
 
 var onnx_config = {
     name: 'Resnet50',
@@ -160,15 +306,15 @@ var tensorflow_config = {
     input_size: [800, 600],
     min_size: [[16, 32], [64, 128], [256, 512]],
     out_ch: 256,
-    url: 'model/backbone_model/model.json',
+    url: ['model/ResNet50/model.json', 'model/MobileNetV2/model.json'],
     steps: [8, 16, 32],
     variances: [0.1, 0.2],
     iou_thresh: 0.4,
     score_thresh: 0.02,
     top_k: 5000,
     clip: false,
-    weight: "model/weights_total.json"
+    weight: ["model/weights_total.json", "model/weights_MobileNetV2.json"]
 };
 
-
-make_base();
+//Debugging Purpose
+//make_base();

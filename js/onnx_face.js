@@ -306,9 +306,12 @@ const sort_score = (bbox, scores, landms, top_k) => {
 
     for(var index = 0; index < max_size; index++) {
         result_scores.set(index, index_sort[index][1]);
-        ndarray.ops.assign(result_bbox.pick(index, null), bbox.pick(index_sort[index][1], null)); 
-        ndarray.ops.assign(result_landms.pick(index, null), landms.pick(index_sort[index][1], null)); 
+        ndarray.ops.assign(result_bbox.pick(index, null), bbox.pick(index_sort[index][0], null)); 
+        ndarray.ops.assign(result_landms.pick(index, null), landms.pick(index_sort[index][0], null)); 
     }
+
+    console.log('Sorted Score');
+    console.log(result_scores);
 
     return [result_bbox, result_scores, result_landms];
 };
@@ -339,11 +342,12 @@ const cpu_nms = (bbox, scores, landms, thresh) => {
     });
 
     while(foundLocations.length > 0) {
-        var last = foundLocations[foundLocations.length - 1];
+        console.log('Suppressing');
+        var last = foundLocations[0]; //foundLocations.length - 1];
         var suppress = [last];
-        pick.push(foundLocations.length - 1);
+        pick.push(0); //foundLocations.length - 1);
 
-        for(let i = 0; i < foundLocations.length; i++) {
+        for(let i = 1; i < foundLocations.length; i++) {
             const box = foundLocations[i];
             const xx1 = max(box.x1, last.x1);
             const yy1 = max(box.y1, last.y1);
@@ -353,7 +357,7 @@ const cpu_nms = (bbox, scores, landms, thresh) => {
             const h = max(0, yy2 - yy1 + 1);
             const overlap = (w*h) / box.area;
 
-            if(overlap > thresh)
+            if(overlap >= thresh)
                 suppress.push(foundLocations[i]);
         }
 
@@ -367,6 +371,9 @@ const cpu_nms = (bbox, scores, landms, thresh) => {
     var result_bbox = ndarray(new Float32Array(pick.length * 4), [pick.length, 4]);
     var result_scores = ndarray(new Float32Array(pick.length), [pick.length]);
     var result_landms = ndarray(new Float32Array(pick.length * 10), [pick.length, 10]);
+
+    console.log('Pick Index');
+    console.log(pick);
 
     pick.forEach((pick_index, i) => {
         ndarray.ops.assign(result_bbox.pick(i, null), bbox.pick(pick_index, null));
@@ -444,7 +451,8 @@ const drawoutputtocanvas = (output, ctx) => {
         ctx.font = `lighter 12px sans-serif`;
         ctx.textAlign = "left";
         ctx.textBaseline = 'bottom';
-        ctx.fillText(`Conf: ${score}`, x1, y1);
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillText(`Conf: ${(score*100).toFixed()} %`, x1, y1);
     }
 };
 
@@ -476,53 +484,33 @@ const detection = async (img, onnx_session, resize_param, config) => {
     var conf = outputData.next().value.data;
     var landms = outputData.next().value.data;
 
-    console.log('After Inference');
-    console.log(loc);
-    console.log(conf);
-    console.log(landms);
-
     var total_result = conf.length / 2;
 
     // Priorbox
     var priors = PriorBox(config, [img_height, img_width]);
-    console.log('Priors');
-    console.log(priors);
 
     // Decode
     var boxes_arr = decode_bbox(loc, priors, config.variance);
     var scores_arr = ndarray(conf, [total_result, 2]).pick(null, 1);
     var landms_arr = decode_landm(landms, priors, config.variance);
 
-    console.log('After Decode');
-    console.log(boxes_arr);
-    console.log(scores_arr);
-    console.log(landms_arr);
-
     var boxes_before = scale_multiply_bbox(boxes_arr, scale);
     var landms_before = scale_multiply_landms(landms_arr, scale1);
-    
-    console.log('Before Screen');
-    console.log(boxes_before);
 
     // Screen Low Score
     var [bbox_screen, scores_screen, landms_screen] = screen_score(boxes_before, scores_arr , landms_before, config.confidence_threshold);
-    
-    console.log('After Screen');
-    console.log(bbox_screen);
 
     // Keep Top-k
     var [bbox_sorted, scores_sorted, landms_sorted] = sort_score(bbox_screen, scores_screen, landms_screen, config.top_k);
 
-    console.log('Before NMS');
-    console.log(bbox_sorted);
-
     // NMS
-    //var [bbox_small, score_result, landms_small, result_size ] = cpu_nms(bbox_sorted, scores_sorted, landms_sorted, config.nms_threshold);
-      
-    var bbox_small = bbox_sorted;
-    var landms_small = landms_sorted;
-    var result_size = bbox_sorted.shape[0];
-    var score_result = scores_sorted;
+    var [bbox_small, score_result, landms_small, result_size ] = cpu_nms(bbox_sorted, scores_sorted, landms_sorted, config.nms_threshold);
+    
+    // Debugging Purpose
+    //var bbox_small = bbox_sorted;
+    //var landms_small = landms_sorted;
+    //var result_size = bbox_sorted.shape[0];
+    //var score_result = scores_sorted;
 
     //console.log('After NMS');
     //console.log(bbox_small);
