@@ -124,14 +124,11 @@
                 </div>
 -->
                 <div class = "row row-area" id = 'preview-area' style = 'display:none;'>
-                    <hr /> 
 		    <div class = "col">
                         <h3 class = 'header-margin'>Preview</h3>
                         <video id = 'main-video-area' style = 'display:none' muted></video>
                         <canvas id = 'main-canvas-area' style = 'display:none'></canvas>
                     </div>
-		    <br />
-		    <hr />
                 </div>
 				
                 <div class = 'row row-area' id = 'download-image-area' style = 'display:none;'>

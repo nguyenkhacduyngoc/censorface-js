@@ -20,6 +20,7 @@ const onmainbuttonclick = async (event) => {
     var videoinput = document.getElementById('main-video-area');
     var canvas = document.getElementById('main-canvas-area');
     var stop_video = document.getElementById('clear-video-area');
+    var preview_area = document.getElementById('preview-area');
 
     // Setting page size
     videoinput.width = 800;
@@ -38,6 +39,7 @@ const onmainbuttonclick = async (event) => {
     // Show Canvas
     canvas.style.display = '';
     stop_video.style.display = '';
+    preview_area.style.display = '';
 };
 
 const drawcanvas_videoframe = async () => {
