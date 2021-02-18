@@ -416,43 +416,19 @@ const result_scaling = (bbox, landmark, resize_param) => {
     return [result_bbox, result_landms];
 };
 
-const drawoutputtocanvas = (output, ctx) => {
-    var { bbox , landmark, conf, size} = output; 
+const drawoutputtocanvas = (output, ctx, thickness) => {
+    var { landmark, size} = output; 
 
+    console.log(`Fill with ${thickness}`);
     for(var index = 0; index < size; index++) {
-        // Bbox
-        var x1 = parseInt(bbox.get(index, 0)),
-            y1 = parseInt(bbox.get(index, 1)),
-            x2 = parseInt(bbox.get(index, 2)),
-            y2 = parseInt(bbox.get(index, 3));
+        // Censor Area
+        var x1 = landmark.get(index, 0) - thickness,
+        y1 = landmark.get(index, 1) - thickness,
+        x2 = landmark.get(index, 2) + thickness,
+        y2 = landmark.get(index, 3) + thickness;
 
-        // Draw Bbox
-        ctx.beginPath();
-        ctx.strokeStyle = '#2ecc71';
-        ctx.rect(x1, y1, (x2-x1) + 1, (y2-y1) + 1);
-        ctx.stroke();
-
-        // Landmark
-        for(var i = 0; i < 5; i++) {
-            var x = landmark.get(index, i * 2),
-                y = landmark.get(index, i * 2 + 1),
-                r = 1,
-                sangle = 0,
-                eangle = 2 * Math.PI;
-
-            ctx.beginPath();
-            ctx.strokeStyle = '#2ecc71';
-            ctx.arc(x, y, r, sangle, eangle);
-            ctx.stroke();
-        }
-
-        // Score
-        var score = conf.get(index);
-        ctx.font = `lighter 12px sans-serif`;
-        ctx.textAlign = "left";
-        ctx.textBaseline = 'bottom';
-        ctx.fillStyle = '#2ecc71';
-        ctx.fillText(`Conf: ${(score*100).toFixed()} %`, x1, y1);
+        ctx.strokeStyle = '#000000';
+        ctx.fillRect(x1, y1, (x2-x1) + 1, (y2-y1) + 1);
     }
 };
 
