@@ -10,6 +10,7 @@ using Retinaface with MobileNetV2 as a backbone and applying the two facial land
 
 ### Result
 Here is the result of the Censorface below.
+
 ![Censor result](https://nickuntitled.github.io/face-detection-js/result.png "Censor Result")
 
 ```
