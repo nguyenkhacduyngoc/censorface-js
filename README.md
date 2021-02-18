@@ -8,6 +8,9 @@ The Model is from [Pytorch model at this repository](https://github.com/biubug6/
 For demo the application, you can access at [my page](https://nickuntitled.github.io/face-detection-js) in order to test the face detection algorithm by censoring the face by
 using Retinaface with MobileNetV2 as a backbone.
 
+### Result
+Here is the result of the Censorface below.
+
 ```
 Citation
 =========
