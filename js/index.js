@@ -76,9 +76,7 @@ const onbrowsechange = (event) => {
     img.src = URL.createObjectURL(event.target.files[0]);
 };
 
-const onloadmodelclick = async (event) => {
-    event.preventDefault();
-
+const loadmodel = async () => {
     show_alert('Loading model.');
 
     try {
@@ -130,14 +128,18 @@ const hide_alert = () => {
     alert_area.style.display = 'none';
 };
 
+const onLoad = (event) => {
+    console.log('Loading Model...');
+    loadmodel();
+};
+
 var capture_face = document.getElementById('capture-face');
 capture_face.addEventListener('click', oncapturefaceclick);
 
 var browsefile = document.getElementById('browseimage');
 browsefile.addEventListener('change', onbrowsechange);
 
-var load_model_area = document.getElementById('load-model-btn');
-load_model_area.addEventListener('click', onloadmodelclick);
+window.addEventListener('DOMContentLoaded', onLoad);
 
 var clear_image_area = document.getElementById('clear-image');
 clear_image_area.addEventListener('click', onclearimage);
