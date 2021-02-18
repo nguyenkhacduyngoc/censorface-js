@@ -1,5 +1,5 @@
-# face-detection-js
-Face Detection in Javascript by ONNX.js. In this repository, it is the example of Retinaface which is a state-of-the-art single stage face detection algorithm shown in CVPR 2020.
+# censorface-js
+Censorface in Javascript by ONNX.js. In this repository, it is the example of Retinaface which is a state-of-the-art single stage face detection algorithm shown in CVPR 2020.
 The paper you can follow this [paper](https://arxiv.org/abs/1905.00641) which has title RetinaFace: Single-stage Dense Face Localisation in the Wild.
 
 The Model is from [Pytorch model at this repository](https://github.com/biubug6/Pytorch_Retinaface) converted into ONNX model.
