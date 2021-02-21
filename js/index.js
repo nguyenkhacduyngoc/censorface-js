@@ -84,7 +84,7 @@ const loadmodel = async () => {
 
         // Load model
         console.log(`Model Path = ${model_path}`);
-        window.session = new onnx.InferenceSession({ backendHint: 'wasm' });    //wasm
+        window.session = new onnx.InferenceSession({ backendHint: 'webgl' });    //wasm
         await window.session.loadModel(model_path); //'./model/ResNet50.onnx');
 
         show_alert('Finish loading model.');
